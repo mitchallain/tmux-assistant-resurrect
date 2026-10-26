@@ -98,6 +98,7 @@ def score(item):
     return (
         0 if reused else 1,
         active,
+        mtime if active else 0,
         prior,
         -distance,
         mtime,

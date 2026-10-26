@@ -199,7 +199,7 @@ migrate_legacy_state_files() {
 # `kill -0 0` signals the caller's own process group and always succeeds.
 reap_stale_state_files() {
 	local reaped=0 f base pid stale
-	for f in "$STATE_DIR"/claude-*.json "$STATE_DIR"/cursor-*.json "$STATE_DIR"/opencode-*.json; do
+	for f in "$STATE_DIR"/claude-*.json "$STATE_DIR"/cursor-*.json "$STATE_DIR"/opencode-*.json "$STATE_DIR"/pi-*.json; do
 		[ -f "$f" ] || continue
 		base=$(basename "$f")
 		pid="${base#*-}"
@@ -970,18 +970,35 @@ get_pi_session() {
 	local child_pid="$1"
 	local args="$2"
 	local cwd="${3:-}"
+	local sid=""
 
-	# Method 1: --session flag in process args (chicken-and-egg fallback)
+	# Method 1: Pi extension state file ($STATE_DIR/pi-<pid>.json).
+	# Authoritative for in-process session switches (/new, /clear, /handoff, /resume)
+	# and suppresses false matches on fresh uncommitted sessions (unpersisted: true).
+	local state_file="$STATE_DIR/pi-${child_pid}.json"
+	if [ -f "$state_file" ]; then
+		local unpersisted
+		unpersisted=$(jq -r '.unpersisted // false' "$state_file" 2>/dev/null || echo "false")
+		if [ "$unpersisted" = "true" ]; then
+			return 0
+		fi
+		sid=$(jq -r '.session_id // empty' "$state_file" 2>/dev/null || true)
+		if [ -n "$sid" ]; then
+			echo "$sid"
+			return
+		fi
+	fi
+
+	# Method 2: --session flag in process args (chicken-and-egg fallback)
 	# After restore, pi is launched as `pi --session <session_id>`.
 	# Supports both `--session <id>` and `--session=<id>` forms.
-	local sid
 	sid=$(echo "$args" | sed -n 's/.*--session[= ] *\([A-Za-z0-9_-]*\).*/\1/p')
 	if [ -n "$sid" ]; then
 		echo "$sid"
 		return
 	fi
 
-	# Method 2: session files under ~/.pi/agent/sessions/--<cwd>--.
+	# Method 3: session files under ~/.pi/agent/sessions/--<cwd>--.
 	# Pi writes one JSONL file per session with a session header. The shared
 	# selector keeps the existing process-time scoring and same-cwd dedup policy.
 	local sessions_root="${PI_CODING_AGENT_SESSION_DIR:-${HOME}/.pi/agent/sessions}"
